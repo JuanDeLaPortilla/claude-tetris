@@ -13,7 +13,13 @@ const COLORS = [
   '#e57373', // Z - red
   '#90caf9', // J - pale blue
   '#ffb74d', // L - orange
+  '#ff7043', // 8 - bomb
 ];
+
+const BOMB_COLOR = 8;
+const POWERUP_BASE_CHANCE = 0.60;      // probabilidad en nivel 1
+const POWERUP_CHANCE_PER_LEVEL = 0.03; // incremento por nivel
+const POWERUP_MAX_CHANCE = 0.90;       // tope
 
 const PIECES = [
   null,
@@ -28,6 +34,73 @@ const PIECES = [
 
 const LINE_SCORES = [0, 100, 300, 500, 800];
 
+class Powerup {
+  constructor({ type, name, shape, colorIndex }) {
+    this.type = type;
+    this.name = name;
+    this.shape = shape;
+    this.colorIndex = colorIndex;
+  }
+
+  createPiece() {
+    const shape = this.shape.map(row => [...row]);
+    return {
+      type: this.colorIndex,
+      shape,
+      x: Math.floor(COLS / 2) - Math.floor(shape[0].length / 2),
+      y: 0,
+      powerup: this,
+    };
+  }
+
+  // Efecto al aterrizar. Muta `board` y devuelve los puntos ganados.
+  apply(piece) { return 0; }
+
+  // Decoración extra sobre el bloque dibujado.
+  decorate(context, x, y, size, alpha) {}
+}
+
+class BombPowerup extends Powerup {
+  constructor() {
+    super({ type: 'bomb', name: 'BOMBA', shape: [[BOMB_COLOR]], colorIndex: BOMB_COLOR });
+  }
+
+  apply(piece) {
+    let destroyed = 0;
+    for (let r = piece.y - 1; r <= piece.y + 1; r++) {
+      for (let c = piece.x - 1; c <= piece.x + 1; c++) {
+        if (r < 0 || r >= ROWS || c < 0 || c >= COLS) continue;
+        if (board[r][c]) {
+          board[r][c] = 0;
+          destroyed++;
+        }
+      }
+    }
+    return destroyed * 10 * level;
+  }
+
+  decorate(context, x, y, size, alpha) {
+    context.globalAlpha = alpha ?? 1;
+    context.fillStyle = '#2b1a12';
+    context.beginPath();
+    context.arc(x * size + size / 2, y * size + size / 2 + 2, size * 0.28, 0, Math.PI * 2);
+    context.fill();
+    context.strokeStyle = '#ffe0b2';
+    context.lineWidth = 2;
+    context.beginPath();
+    context.moveTo(x * size + size / 2, y * size + size / 2 - size * 0.28 + 2);
+    context.lineTo(x * size + size / 2 + size * 0.18, y * size + 2);
+    context.stroke();
+    context.globalAlpha = 1;
+  }
+}
+
+const POWERUPS = [new BombPowerup()];
+
+function randomPowerup() {
+  return POWERUPS[Math.floor(Math.random() * POWERUPS.length)];
+}
+
 const canvas = document.getElementById('board');
 const ctx = canvas.getContext('2d');
 const nextCanvas = document.getElementById('next-canvas');
@@ -39,11 +112,12 @@ const overlay = document.getElementById('overlay');
 const overlayTitle = document.getElementById('overlay-title');
 const overlayScore = document.getElementById('overlay-score');
 const restartBtn = document.getElementById('restart-btn');
+const powerupEl = document.getElementById('powerup');
 const themeToggleBtn = document.getElementById('theme-toggle');
 
 const THEME_KEY = 'tetris-theme';
 
-let board, current, next, score, lines, level, paused, gameOver, lastTime, dropAccum, dropInterval, animId;
+let board, current, next, score, lines, level, paused, gameOver, lastTime, dropAccum, dropInterval, animId, lastWasPowerup;
 let gridLineColor = '#22222e';
 let blockHighlightColor = 'rgba(255,255,255,0.12)';
 
@@ -78,6 +152,23 @@ function randomPiece() {
   const type = Math.floor(Math.random() * 7) + 1;
   const shape = PIECES[type].map(row => [...row]);
   return { type, shape, x: Math.floor(COLS / 2) - Math.floor(shape[0].length / 2), y: 0 };
+}
+
+function powerupChance() {
+  return Math.min(
+    POWERUP_MAX_CHANCE,
+    POWERUP_BASE_CHANCE + (level - 1) * POWERUP_CHANCE_PER_LEVEL
+  );
+}
+
+function nextPieceForQueue() {
+  // nunca dos bombas seguidas: tras una bomba se fuerza una pieza normal
+  if (!lastWasPowerup && Math.random() < powerupChance()) {
+    lastWasPowerup = true;
+    return randomPowerup().createPiece();
+  }
+  lastWasPowerup = false;
+  return randomPiece();
 }
 
 function collide(shape, ox, oy) {
@@ -164,14 +255,19 @@ function softDrop() {
 }
 
 function lockPiece() {
-  merge();
+  if (current.powerup) {
+    score += current.powerup.apply(current);
+  } else {
+    merge();
+  }
   clearLines();
   spawn();
+  updateHUD();
 }
 
 function spawn() {
   current = next;
-  next = randomPiece();
+  next = nextPieceForQueue();
   if (collide(current.shape, current.x, current.y)) {
     endGame();
     return;
@@ -183,6 +279,7 @@ function updateHUD() {
   scoreEl.textContent = score.toLocaleString();
   linesEl.textContent = lines;
   levelEl.textContent = level;
+  if (powerupEl) powerupEl.textContent = next.powerup ? next.powerup.name : '—';
 }
 
 function drawBlock(context, x, y, colorIndex, size, alpha) {
@@ -227,13 +324,18 @@ function draw() {
   const gy = ghostY();
   for (let r = 0; r < current.shape.length; r++)
     for (let c = 0; c < current.shape[r].length; c++)
-      if (current.shape[r][c])
+      if (current.shape[r][c]) {
         drawBlock(ctx, current.x + c, gy + r, current.shape[r][c], BLOCK, 0.2);
+        if (current.powerup) current.powerup.decorate(ctx, current.x + c, gy + r, BLOCK, 0.2);
+      }
 
   // current piece
   for (let r = 0; r < current.shape.length; r++)
     for (let c = 0; c < current.shape[r].length; c++)
-      drawBlock(ctx, current.x + c, current.y + r, current.shape[r][c], BLOCK);
+      if (current.shape[r][c]) {
+        drawBlock(ctx, current.x + c, current.y + r, current.shape[r][c], BLOCK);
+        if (current.powerup) current.powerup.decorate(ctx, current.x + c, current.y + r, BLOCK);
+      }
 }
 
 function drawNext() {
@@ -244,7 +346,10 @@ function drawNext() {
   const offY = Math.floor((4 - shape.length) / 2);
   for (let r = 0; r < shape.length; r++)
     for (let c = 0; c < shape[r].length; c++)
-      drawBlock(nextCtx, offX + c, offY + r, shape[r][c], NB);
+      if (shape[r][c]) {
+        drawBlock(nextCtx, offX + c, offY + r, shape[r][c], NB);
+        if (next.powerup) next.powerup.decorate(nextCtx, offX + c, offY + r, NB);
+      }
 }
 
 function endGame() {
@@ -295,8 +400,9 @@ function init() {
   gameOver = false;
   dropInterval = 1000;
   dropAccum = 0;
+  lastWasPowerup = false;
   lastTime = performance.now();
-  next = randomPiece();
+  next = nextPieceForQueue();
   spawn();
   updateHUD();
   overlay.classList.add('hidden');
