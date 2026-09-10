@@ -1,0 +1,89 @@
+name: Claude Issue Triage
+
+on:
+  issues:
+    types: [opened, edited]
+
+concurrency:
+  group: issue-triage-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  triage:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code Issue Triage
+        id: claude-triage
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: '--allowedTools "Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh label list:*),Read,Grep,Glob"'
+          prompt: |
+            Eres un analista tecnico haciendo triage del issue #${{ github.event.issue.number }}
+            del repositorio ${{ github.repository }}.
+
+            Contexto del proyecto: es un Tetris en JavaScript vanilla (sin dependencias, sin build).
+            Toda la logica del juego vive en `game.js`; `index.html` define el DOM/canvas y
+            `style.css` el tema visual. Lee `CLAUDE.md` primero para el mapa de arquitectura
+            (board model, piezas/PIECES, rotateCW, collide, tryRotate/wall kicks, loop,
+            lockPiece/merge/clearLines/spawn, scoring/level/dropInterval, ghost piece).
+
+            Pasos:
+            1. Lee el issue completo con `gh issue view ${{ github.event.issue.number }} --json title,body,comments`.
+            2. Investiga el codigo relevante en `game.js` (y `index.html`/`style.css` si aplica)
+               con Read/Grep/Glob antes de opinar. No inventes nombres de funciones o lineas:
+               cita solo lo que verificaste leyendo el archivo.
+            3. Aplica labels con `gh issue edit ${{ github.event.issue.number }} --add-label "..."`.
+               Usa EXCLUSIVAMENTE este set fijo (no crees labels nuevos, no uses otros):
+               - Tipo (elige exactamente uno): bug, enhancement, documentation, question
+               - Area (uno o mas): area:gameplay, area:render, area:input, area:score, area:ui
+               - Prioridad (exactamente uno): prioridad:alta, prioridad:media, prioridad:baja
+               - needs-info: solo si el issue no trae informacion suficiente para diagnosticar
+                 o reproducir (pasos, comportamiento esperado vs actual, etc.)
+               - triaged: siempre, en todo issue procesado por este workflow.
+            4. Publica UN solo comentario nuevo con `gh issue comment ${{ github.event.issue.number }} --body "..."`
+               en espanol, tecnico y sin relleno, con esta plantilla exacta:
+
+               ## Diagnostico automatico
+
+               **Clasificacion:** <bug|mejora|duda|documentacion> · **Area:** <area(s)> · **Prioridad:** <alta|media|baja>
+
+               ### Resumen
+               <1-2 frases: que pasa o que se pide>
+
+               ### Causa probable / punto de cambio
+               <que mecanismo del juego esta involucrado y por que, basado en el codigo leido>
+
+               ### Archivos y funciones implicadas
+               - `game.js:<linea>` — `<funcion>` — <que rol juega>
+
+               ### Enfoque sugerido
+               1. <paso concreto de implementacion>
+               2. <...>
+
+               ### Riesgos y regresiones a vigilar
+               - <ej: cambiar COLS/ROWS/BLOCK obliga a actualizar width/height del canvas en index.html>
+
+               ### Como verificar
+               <pasos manuales en el navegador; este repo no tiene suite de tests automatizada>
+
+               ### Informacion faltante
+               <solo si aplica; si no, omite esta seccion por completo>
+
+            5. Si el issue no trae informacion suficiente para diagnosticar con certeza, dilo
+               explicitamente en el comentario y pide lo que falta en vez de inventar un diagnostico.
+               Aplica el label needs-info en ese caso.
+            6. Si este run corresponde a una edicion del issue (evento "edited") y ya existe un
+               comentario de diagnostico previo tuyo, publica un comentario NUEVO (no edites el
+               viejo) cuya primera linea diga claramente que reemplaza al diagnostico anterior.
