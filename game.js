@@ -15,9 +15,11 @@ const COLORS = [
   '#ffb74d', // L - orange
   '#ff7043', // 8 - bomb
   '#f06292', // 9 - pentominó +
+  '#fff176', // 10 - rayo
 ];
 
 const BOMB_COLOR = 8;
+const LIGHTNING_COLOR = 10;
 const LINES_PER_LEVEL = 10;
 const POWERUP_CHANCE = 0.04;          // probabilidad por pieza, una vez habilitada
 const POWERUP_LEVEL_PROGRESS = 0.6;   // solo tras el 60% de las líneas del nivel
@@ -108,7 +110,52 @@ class BombPowerup extends Powerup {
   }
 }
 
-const POWERUPS = [new BombPowerup()];
+class LightningPowerup extends Powerup {
+  constructor() {
+    super({ type: 'lightning', name: 'RAYO', shape: [[LIGHTNING_COLOR, LIGHTNING_COLOR]], colorIndex: LIGHTNING_COLOR });
+  }
+
+  apply(piece) {
+    const vertical = piece.shape.length > piece.shape[0].length;
+    let destroyed = 0;
+
+    if (vertical) {
+      const c = piece.x;
+      for (let r = 0; r < ROWS; r++) {
+        if (board[r][c]) {
+          board[r][c] = 0;
+          destroyed++;
+        }
+      }
+    } else {
+      const r = piece.y;
+      destroyed = board[r].filter(v => v !== 0).length;
+      board.splice(r, 1);
+      board.unshift(new Array(COLS).fill(0));
+    }
+
+    return destroyed * 10 * level;
+  }
+
+  decorate(context, x, y, size, alpha) {
+    context.globalAlpha = alpha ?? 1;
+    context.fillStyle = '#5d4a00';
+    context.beginPath();
+    context.arc(x * size + size / 2, y * size + size / 2, size * 0.32, 0, Math.PI * 2);
+    context.fill();
+    context.strokeStyle = '#fffde7';
+    context.lineWidth = 2;
+    context.beginPath();
+    context.moveTo(x * size + size * 0.58, y * size + size * 0.18);
+    context.lineTo(x * size + size * 0.38, y * size + size * 0.52);
+    context.lineTo(x * size + size * 0.56, y * size + size * 0.52);
+    context.lineTo(x * size + size * 0.42, y * size + size * 0.84);
+    context.stroke();
+    context.globalAlpha = 1;
+  }
+}
+
+const POWERUPS = [new BombPowerup(), new LightningPowerup()];
 
 function randomPowerup() {
   return POWERUPS[Math.floor(Math.random() * POWERUPS.length)];
