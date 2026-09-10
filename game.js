@@ -14,12 +14,15 @@ const COLORS = [
   '#90caf9', // J - pale blue
   '#ffb74d', // L - orange
   '#ff7043', // 8 - bomb
+  '#f06292', // 9 - pentominó +
 ];
 
 const BOMB_COLOR = 8;
-const POWERUP_BASE_CHANCE = 0.60;      // probabilidad en nivel 1
-const POWERUP_CHANCE_PER_LEVEL = 0.03; // incremento por nivel
-const POWERUP_MAX_CHANCE = 0.90;       // tope
+const LINES_PER_LEVEL = 10;
+const POWERUP_CHANCE = 0.04;          // probabilidad por pieza, una vez habilitada
+const POWERUP_LEVEL_PROGRESS = 0.6;   // solo tras el 60% de las líneas del nivel
+const POWERUP_COOLDOWN = 15;          // piezas mínimas entre bombas
+const PENTOMINO_CHANCE = 0.08;        // probabilidad fija de pieza de 5 bloques
 
 const PIECES = [
   null,
@@ -30,6 +33,10 @@ const PIECES = [
   [[5,5,0],[0,5,5],[0,0,0]],                  // Z
   [[6,0,0],[6,6,6],[0,0,0]],                  // J
   [[0,0,7],[7,7,7],[0,0,0]],                  // L
+];
+
+const PENTOMINOS = [
+  [[0,9,0],[9,9,9],[0,9,0]], // + (X-pentominó)
 ];
 
 const LINE_SCORES = [0, 100, 300, 500, 800];
@@ -67,15 +74,21 @@ class BombPowerup extends Powerup {
 
   apply(piece) {
     let destroyed = 0;
+    const columns = new Set();
     for (let r = piece.y - 1; r <= piece.y + 1; r++) {
       for (let c = piece.x - 1; c <= piece.x + 1; c++) {
         if (r < 0 || r >= ROWS || c < 0 || c >= COLS) continue;
         if (board[r][c]) {
           board[r][c] = 0;
           destroyed++;
+          columns.add(c);
         }
       }
     }
+    // Sin esto, los bloques que quedan sobre un hueco del boom quedan
+    // flotando y ese hueco jamás se puede volver a llenar, por lo que la
+    // línea nunca vuelve a completarse y se acumula para siempre.
+    for (const c of columns) collapseColumn(c);
     return destroyed * 10 * level;
   }
 
@@ -117,7 +130,7 @@ const themeToggleBtn = document.getElementById('theme-toggle');
 
 const THEME_KEY = 'tetris-theme';
 
-let board, current, next, score, lines, level, paused, gameOver, lastTime, dropAccum, dropInterval, animId, lastWasPowerup;
+let board, current, next, score, lines, level, paused, gameOver, lastTime, dropAccum, dropInterval, animId, piecesSincePowerup;
 let gridLineColor = '#22222e';
 let blockHighlightColor = 'rgba(255,255,255,0.12)';
 
@@ -154,20 +167,23 @@ function randomPiece() {
   return { type, shape, x: Math.floor(COLS / 2) - Math.floor(shape[0].length / 2), y: 0 };
 }
 
-function powerupChance() {
-  return Math.min(
-    POWERUP_MAX_CHANCE,
-    POWERUP_BASE_CHANCE + (level - 1) * POWERUP_CHANCE_PER_LEVEL
-  );
+function randomPentomino() {
+  const shape = PENTOMINOS[Math.floor(Math.random() * PENTOMINOS.length)].map(row => [...row]);
+  return { type: shape[1][1], shape, x: Math.floor(COLS / 2) - Math.floor(shape[0].length / 2), y: 0 };
+}
+
+function powerupAllowed() {
+  const progress = (lines % LINES_PER_LEVEL) / LINES_PER_LEVEL;
+  return progress >= POWERUP_LEVEL_PROGRESS && piecesSincePowerup >= POWERUP_COOLDOWN;
 }
 
 function nextPieceForQueue() {
-  // nunca dos bombas seguidas: tras una bomba se fuerza una pieza normal
-  if (!lastWasPowerup && Math.random() < powerupChance()) {
-    lastWasPowerup = true;
+  piecesSincePowerup++;
+  if (powerupAllowed() && Math.random() < POWERUP_CHANCE) {
+    piecesSincePowerup = 0;
     return randomPowerup().createPiece();
   }
-  lastWasPowerup = false;
+  if (Math.random() < PENTOMINO_CHANCE) return randomPentomino();
   return randomPiece();
 }
 
@@ -212,6 +228,13 @@ function merge() {
         board[current.y + r][current.x + c] = current.shape[r][c];
 }
 
+function collapseColumn(c) {
+  const values = [];
+  for (let r = 0; r < ROWS; r++) if (board[r][c]) values.push(board[r][c]);
+  const pad = ROWS - values.length;
+  for (let r = 0; r < ROWS; r++) board[r][c] = r < pad ? 0 : values[r - pad];
+}
+
 function clearLines() {
   let cleared = 0;
   for (let r = ROWS - 1; r >= 0; r--) {
@@ -225,7 +248,7 @@ function clearLines() {
   if (cleared) {
     lines += cleared;
     score += (LINE_SCORES[cleared] || 0) * level;
-    level = Math.floor(lines / 10) + 1;
+    level = Math.floor(lines / LINES_PER_LEVEL) + 1;
     dropInterval = Math.max(100, 1000 - (level - 1) * 90);
     updateHUD();
   }
@@ -400,7 +423,7 @@ function init() {
   gameOver = false;
   dropInterval = 1000;
   dropAccum = 0;
-  lastWasPowerup = false;
+  piecesSincePowerup = POWERUP_COOLDOWN;
   lastTime = performance.now();
   next = nextPieceForQueue();
   spawn();
